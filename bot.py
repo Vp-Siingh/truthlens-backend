@@ -1,4 +1,3 @@
-from dotenv import load_dotenv
 import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -10,12 +9,15 @@ import requests
 app = Flask(__name__)
 CORS(app)
 
+
 # =========================================
 # TWILIO CONFIG
 # =========================================
 
-TWILIO_ACCOUNT_SID=your_twilio_sid
-TWILIO_AUTH_TOKEN=your_twilio_auth_token
+load_dotenv()
+
+account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+auth_token = os.getenv("TWILIO_AUTH_TOKEN")
 
 # =========================================
 # MISLEADING CLAIM DATABASE
