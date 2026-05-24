@@ -1,22 +1,22 @@
 import os
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from twilio.twiml.messaging_response import MessagingResponse
-from PIL import Image
-import pytesseract
 import requests
 
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+from twilio.twiml.messaging_response import MessagingResponse
+
 app = Flask(__name__)
-CORS(app)
 
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # =========================================
-# TWILIO CONFIG
+# ENV VARIABLES
 # =========================================
 
-
-account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY")
 
 # =========================================
 # MISLEADING CLAIM DATABASE
@@ -28,29 +28,47 @@ misleading_keywords = {
     "⚠️ '100% Natural' may be misleading because processed additives may still exist.",
 
     "clinically proven":
-    "⚠️ 'Clinically Proven' detected without scientific references.",
+    "⚠️ 'Clinically Proven' detected without visible scientific references.",
+
+    "scientifically proven":
+    "⚠️ Scientific proof claims require proper study citations.",
 
     "doctor recommended":
-    "⚠️ 'Doctor Recommended' claims may lack evidence.",
+    "⚠️ 'Doctor Recommended' claims may lack verifiable evidence.",
 
     "instant":
-    "⚠️ Instant-result claims are scientifically questionable.",
+    "⚠️ Instant-result claims are often scientifically questionable.",
 
     "boost immunity":
-    "⚠️ Immunity boosting claims are often vague.",
+    "⚠️ Immunity boosting claims are frequently vague and difficult to verify.",
 
     "fat burner":
-    "⚠️ Fat burner claims are frequently exaggerated.",
+    "⚠️ Fat burner marketing claims are often exaggerated.",
+
+    "lose weight fast":
+    "⚠️ Rapid weight loss claims may be misleading.",
+
+    "limited offer":
+    "⚠️ Limited-time urgency tactics detected.",
+
+    "best in india":
+    "⚠️ Superiority claims may lack measurable evidence.",
+
+    "no side effects":
+    "⚠️ 'No side effects' is a potentially misleading medical claim.",
+
+    "chemical free":
+    "⚠️ 'Chemical Free' is scientifically inaccurate marketing language.",
 
     "miracle":
-    "⚠️ Miracle cure claims are suspicious.",
+    "⚠️ Miracle cure claims are highly suspicious.",
 
     "guaranteed":
     "⚠️ Guaranteed-result claims may be misleading."
 }
 
 # =========================================
-# TRUST SCORE
+# TRUST SCORE FUNCTION
 # =========================================
 
 def calculate_trust_score(issue_count):
@@ -61,6 +79,37 @@ def calculate_trust_score(issue_count):
         score = 20
 
     return score
+
+# =========================================
+# OCR FUNCTION USING OCR.SPACE
+# =========================================
+
+def extract_text_from_image(image_path):
+
+    payload = {
+        'apikey': OCR_SPACE_API_KEY,
+        'language': 'eng'
+    }
+
+    with open(image_path, 'rb') as f:
+
+        response = requests.post(
+            'https://api.ocr.space/parse/image',
+            files={'filename': f},
+            data=payload
+        )
+
+    result = response.json()
+
+    try:
+
+        extracted_text = result['ParsedResults'][0]['ParsedText']
+
+    except Exception:
+
+        extracted_text = ""
+
+    return extracted_text
 
 # =========================================
 # ANALYSIS ENGINE
@@ -78,6 +127,7 @@ def analyze_text(text):
             analysis.append(warning)
 
     if len(analysis) == 0:
+
         analysis.append(
             "✅ No major misleading patterns detected."
         )
@@ -94,27 +144,43 @@ def analyze_text(text):
     return result
 
 # =========================================
-# WEBSITE API
+# WEBSITE IMAGE ANALYSIS API
 # =========================================
 
 @app.route("/analyze", methods=["POST"])
 def analyze_image():
 
-    file = request.files["file"]
+    try:
 
-    image_path = "images/web_upload.jpg"
+        file = request.files["file"]
 
-    file.save(image_path)
+        image_path = "uploaded_image.jpg"
 
-    extracted_text = pytesseract.image_to_string(
-        Image.open(image_path)
-    )
+        file.save(image_path)
 
-    result = analyze_text(extracted_text)
+        extracted_text = extract_text_from_image(
+            image_path
+        )
 
-    return jsonify({
-        "result": result
-    })
+        print("OCR TEXT:")
+        print(extracted_text)
+
+        result = analyze_text(
+            extracted_text
+        )
+
+        return jsonify({
+            "result": result,
+            "ocr_text": extracted_text
+        })
+
+    except Exception as e:
+
+        print("ERROR:", str(e))
+
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 # =========================================
 # WHATSAPP BOT
@@ -124,34 +190,52 @@ def analyze_image():
 def whatsapp_bot():
 
     response = MessagingResponse()
+
     msg = response.message()
 
     try:
 
-        num_media = int(request.values.get("NumMedia", 0))
+        num_media = int(
+            request.values.get("NumMedia", 0)
+        )
+
+        # =========================================
+        # IMAGE MESSAGE
+        # =========================================
 
         if num_media > 0:
 
             media_url = request.values.get("MediaUrl0")
-            content_type = request.values.get("MediaContentType0")
+
+            content_type = request.values.get(
+                "MediaContentType0"
+            )
 
             if "image" in content_type:
 
                 image_response = requests.get(
                     media_url,
-                    auth=(account_sid, auth_token)
+                    auth=(
+                        TWILIO_ACCOUNT_SID,
+                        TWILIO_AUTH_TOKEN
+                    )
                 )
 
-                image_path = "images/uploaded_image.jpg"
+                image_path = "whatsapp_upload.jpg"
 
                 with open(image_path, "wb") as handler:
-                    handler.write(image_response.content)
 
-                extracted_text = pytesseract.image_to_string(
-                    Image.open(image_path)
+                    handler.write(
+                        image_response.content
+                    )
+
+                extracted_text = extract_text_from_image(
+                    image_path
                 )
 
-                result = analyze_text(extracted_text)
+                result = analyze_text(
+                    extracted_text
+                )
 
                 msg.body(
                     "🔍 TruthLens Analysis\n\n"
@@ -161,14 +245,23 @@ def whatsapp_bot():
             else:
 
                 msg.body(
-                    "⚠️ Please upload image."
+                    "⚠️ Please upload an image."
                 )
+
+        # =========================================
+        # TEXT MESSAGE
+        # =========================================
 
         else:
 
-            incoming_msg = request.values.get("Body", "")
+            incoming_msg = request.values.get(
+                "Body",
+                ""
+            )
 
-            result = analyze_text(incoming_msg)
+            result = analyze_text(
+                incoming_msg
+            )
 
             msg.body(
                 "🔍 TruthLens Analysis\n\n"
@@ -186,11 +279,20 @@ def whatsapp_bot():
     return str(response)
 
 # =========================================
-# RUN SERVER
+# ROOT ROUTE
+# =========================================
+
+@app.route("/")
+def home():
+
+    return {
+        "status": "TruthLens backend is running"
+    }
+
+# =========================================
+# RUN APP
 # =========================================
 
 if __name__ == "__main__":
 
-    port = int(os.environ.get("PORT", 5050))
-
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5050)
